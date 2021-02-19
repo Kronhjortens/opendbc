@@ -35,6 +35,38 @@ unsigned int subaru_checksum(unsigned int address, uint64_t d, int l) {
   return s & 0xFF;
 }
 
+unsigned int chrysler_checksum(unsigned int address, uint64_t d, int l) {
+  /* This function does not want the checksum byte in the input data.
+  jeep chrysler canbus checksum from http://illmatics.com/Remote%20Car%20Hacking.pdf */
+  uint8_t checksum = 0xFF;
+  for (int j = 0; j < (l - 1); j++) {
+    uint8_t shift = 0x80;
+    uint8_t curr = (d >> 8*j) & 0xFF;
+    for (int i=0; i<8; i++) {
+      uint8_t bit_sum = curr & shift;
+      uint8_t temp_chk = checksum & 0x80U;
+      if (bit_sum != 0U) {
+        bit_sum = 0x1C;
+        if (temp_chk != 0U) {
+          bit_sum = 1;
+        }
+        checksum = checksum << 1;
+        temp_chk = checksum | 1U;
+        bit_sum ^= temp_chk;
+      } else {
+        if (temp_chk != 0U) {
+          bit_sum = 0x1D;
+        }
+        checksum = checksum << 1;
+        bit_sum ^= checksum;
+      }
+      checksum = bit_sum;
+      shift = shift >> 1;
+    }
+  }
+  return ~checksum & 0xFF;
+}
+
 // Static lookup table for fast computation of CRC8 poly 0x2F, aka 8H2F/AUTOSAR
 uint8_t crc8_lut_8h2f[256];
 
@@ -65,18 +97,17 @@ unsigned int volkswagen_crc(unsigned int address, uint64_t d, int l) {
   // a magic variable padding byte tacked onto the end of the payload.
   // https://www.autosar.org/fileadmin/user_upload/standards/classic/4-3/AUTOSAR_SWS_CRCLibrary.pdf
 
-  uint8_t *dat = (uint8_t *)&d;
   uint8_t crc = 0xFF; // Standard init value for CRC8 8H2F/AUTOSAR
 
   // CRC the payload first, skipping over the first byte where the CRC lives.
   for (int i = 1; i < l; i++) {
-    crc ^= dat[i];
+    crc ^= (d >> (i*8)) & 0xFF;
     crc = crc8_lut_8h2f[crc];
   }
 
   // Look up and apply the magic final CRC padding byte, which permutes by CAN
   // address, and additionally (for SOME addresses) by the message counter.
-  uint8_t counter = dat[1] & 0x0F;
+  uint8_t counter = ((d >> 8) & 0xFF) & 0x0F;
   switch(address) {
     case 0x86:  // LWI_01 Steering Angle
       crc ^= (uint8_t[]){0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86,0x86}[counter];
@@ -144,11 +175,9 @@ unsigned int pedal_checksum(uint64_t d, int l) {
   d >>= ((8-l)*8); // remove padding
   d >>= 8; // remove checksum
 
-  uint8_t *dat = (uint8_t *)&d;
-
   int i, j;
   for (i = 0; i < l - 1; i++) {
-    crc ^= dat[i];
+    crc ^= (d >> (i*8)) & 0xFF;
     for (j = 0; j < 8; j++) {
       if ((crc & 0x80) != 0) {
         crc = (uint8_t)((crc << 1) ^ poly);
